@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>こいのぼりアドベンチャー</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+body {
+  background: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Hiragino Sans', 'Meiryo', sans-serif;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas {
+  display: block;
+  max-width: 100vw;
+  max-height: 100vh;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ===== Game Configuration =====
+const CANVAS_WIDTH = 480;
+const CANVAS_HEIGHT = 720;
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = CANVAS_WIDTH;
+canvas.height = CANVAS_HEIGHT;
+
+// ===== Asset Loading =====
+// Processed (background-removed) canvases used for drawing
+let imgNormal, imgDead, imgDive;
+
+const rawNormal = new Image();
+const rawDead = new Image();
+const rawDive = new Image();
+
+let assetsLoaded = 0;
+const TOTAL_ASSETS = 3;
+
+// Remove checker-pattern background from PNG images
+// Background pixels are grayscale (R≈G≈B) ranging from ~180 to ~255
+function removeCheckerBackground(img) {
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const cx = c.getContext('2d');
+  cx.drawImage(img, 0, 0);
+  const imageData = cx.getImageData(0, 0, c.width, c.height);
+  const data = imageData.data;
+
+  // First pass: flood-fill from edges to find background pixels
+  const w = c.width, h = c.height;
+  const visited = new Uint8Array(w * h);
+  const isBackground = new Uint8Array(w * h);
+  const queue = [];
+
+  function isGrayish(i) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const maxDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
+    return maxDiff < 15 && r > 170;
+  }
+
+  // Seed from all edges
+  for (let x = 0; x < w; x++) {
+    queue.push(x); // top row
+    queue.push((h - 1) * w + x); // bottom row
+  }
+  for (let y = 0; y < h; y++) {
+    queue.push(y * w); // left column
+    queue.push(y * w + (w - 1)); // right column
+  }
+
+  // BFS flood fill
+  while (queue.length > 0) {
+    const idx = queue.pop();
+    if (idx < 0 || idx >= w * h || visited[idx]) continue;
+    visited[idx] = 1;
+    const pi = idx * 4;
+    if (!isGrayish(pi)) continue;
+    isBackground[idx] = 1;
+    const x = idx % w, y = Math.floor(idx / w);
+    if (x > 0) queue.push(idx - 1);
+    if (x < w - 1) queue.push(idx + 1);
+    if (y > 0) queue.push(idx - w);
+    if (y < h - 1) queue.push(idx + w);
+  }
+
+  // Apply transparency
+  for (let i = 0; i < w * h; i++) {
+    if (isBackground[i]) {
+      data[i * 4 + 3] = 0;
+    }
+  }
+
+  cx.putImageData(imageData, 0, 0);
+  return c;
+}
+
+function onAssetLoad() {
+  assetsLoaded++;
+  if (assetsLoaded >= TOTAL_ASSETS) {
+    imgNormal = removeCheckerBackground(rawNormal);
+    imgDead = removeCheckerBackground(rawDead);
+    imgDive = removeCheckerBackground(rawDive);
+    init();
+  }
+}
+
+rawNormal.onload = onAssetLoad;
+rawDead.onload = onAssetLoad;
+rawDive.onload = onAssetLoad;
+
+rawNormal.src = 'assets/koinobori_normal.png';
+rawDead.src = 'assets/koinobori_dead.png';
+rawDive.src = 'assets/koinobori_dive.png';
+
+// ===== Game State =====
+const STATE = Object.freeze({
+  LOADING: 'loading',
+  TITLE: 'title',
+  PLAYING: 'playing',
+  DEAD: 'dead',
+  GAMEOVER: 'gameover',
+});
+
+let gameState = STATE.LOADING;
+let score = 0;
+let highScore = parseInt(localStorage.getItem('koinobori_high') || '0', 10);
+let level = 1;
+let frameCount = 0;
+let deathTimer = 0;
+
+// ===== Difficulty Scaling =====
+function getDifficulty(currentScore) {
+  // Very easy start for 3-year-olds, gradually harder
+  const s = currentScore;
+  return {
+    gravity: 0.12 + Math.min(s * 0.002, 0.12),
+    flapPower: -(2.5 + Math.min(s * 0.015, 1.2)),
+    pipeSpeed: 1.0 + Math.min(s * 0.05, 2.5),
+    gapSize: Math.max(320 - s * 3, 140),
+    pipeInterval: Math.max(300 - s * 3, 120),
+    maxUpSpeed: -(4.0 + Math.min(s * 0.05, 2.0)),
+  };
+}
+
+// ===== Player =====
+function createPlayer() {
+  return {
+    x: 80,
+    y: CANVAS_HEIGHT / 2 - 30,
+    width: 90,
+    height: 58,
+    velocity: 0,
+    rotation: 0,
+    flapAnim: 0,
+  };
+}
+
+let player = createPlayer();
+
+// ===== Pipes =====
+let pipes = [];
+let pipeTimer = 0;
+
+let pipesCreated = 0;
+
+function createPipe(difficulty) {
+  const minTop = 80;
+  const maxTop = CANVAS_HEIGHT - difficulty.gapSize - 120;
+  let topHeight;
+
+  if (pipesCreated < 3) {
+    // First few pipes: gap centered around middle of screen for easy start
+    const center = (CANVAS_HEIGHT - GROUND_HEIGHT) / 2 - difficulty.gapSize / 2;
+    const variance = 40 + pipesCreated * 20;
+    topHeight = center + (Math.random() - 0.5) * variance;
+  } else {
+    topHeight = minTop + Math.random() * (maxTop - minTop);
+  }
+
+  topHeight = Math.max(minTop, Math.min(maxTop, topHeight));
+  pipesCreated++;
+
+  return {
+    x: CANVAS_WIDTH + 10,
+    topHeight: topHeight,
+    gapSize: difficulty.gapSize,
+    scored: false,
+    width: 60,
+  };
+}
+
+// ===== Clouds =====
+let clouds = [];
+for (let i = 0; i < 5; i++) {
+  clouds.push({
+    x: Math.random() * CANVAS_WIDTH,
+    y: 30 + Math.random() * 200,
+    w: 60 + Math.random() * 80,
+    speed: 0.3 + Math.random() * 0.4,
+  });
+}
+
+// ===== Particles =====
+let particles = [];
+
+function spawnParticles(x, y, count, color) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 4,
+      vy: (Math.random() - 0.5) * 4,
+      life: 30 + Math.random() * 20,
+      maxLife: 50,
+      color: color || `hsl(${Math.random() * 360}, 80%, 60%)`,
+      size: 3 + Math.random() * 4,
+    });
+  }
+}
+
+// ===== Stars (score celebration) =====
+let stars = [];
+
+function spawnStars(x, y) {
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI * 2 * i) / 8;
+    stars.push({
+      x, y,
+      vx: Math.cos(angle) * 3,
+      vy: Math.sin(angle) * 3,
+      life: 40,
+      size: 8,
+    });
+  }
+}
+
+// ===== Ground =====
+let groundOffset = 0;
+const GROUND_HEIGHT = 60;
+
+// ===== Drawing Helpers =====
+function drawRoundRect(x, y, w, h, r, fillColor, strokeColor) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  if (fillColor) {
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+  }
+  if (strokeColor) {
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function drawCloud(cloud) {
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.beginPath();
+  ctx.ellipse(cloud.x, cloud.y, cloud.w / 2, 18, 0, 0, Math.PI * 2);
+  ctx.ellipse(cloud.x - cloud.w * 0.25, cloud.y + 5, cloud.w * 0.3, 14, 0, 0, Math.PI * 2);
+  ctx.ellipse(cloud.x + cloud.w * 0.25, cloud.y + 3, cloud.w * 0.25, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawStar(x, y, size, color) {
+  ctx.fillStyle = color || '#FFD700';
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const angle = (Math.PI * 2 * i) / 5 - Math.PI / 2;
+    const outerX = x + Math.cos(angle) * size;
+    const outerY = y + Math.sin(angle) * size;
+    if (i === 0) ctx.moveTo(outerX, outerY);
+    else ctx.lineTo(outerX, outerY);
+    const innerAngle = angle + Math.PI / 5;
+    const innerX = x + Math.cos(innerAngle) * size * 0.4;
+    const innerY = y + Math.sin(innerAngle) * size * 0.4;
+    ctx.lineTo(innerX, innerY);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPipe(pipe) {
+  const grad1 = ctx.createLinearGradient(pipe.x, 0, pipe.x + pipe.width, 0);
+  grad1.addColorStop(0, '#2E8B57');
+  grad1.addColorStop(0.3, '#5CBF5C');
+  grad1.addColorStop(0.7, '#3DA03D');
+  grad1.addColorStop(1, '#2E7D32');
+
+  // Top pipe
+  ctx.fillStyle = grad1;
+  ctx.fillRect(pipe.x, 0, pipe.width, pipe.topHeight);
+  // Top pipe cap
+  ctx.fillStyle = '#43A047';
+  ctx.fillRect(pipe.x - 5, pipe.topHeight - 20, pipe.width + 10, 20);
+  ctx.strokeStyle = '#1B5E20';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pipe.x - 5, pipe.topHeight - 20, pipe.width + 10, 20);
+
+  // Bottom pipe
+  const bottomY = pipe.topHeight + pipe.gapSize;
+  ctx.fillStyle = grad1;
+  ctx.fillRect(pipe.x, bottomY, pipe.width, CANVAS_HEIGHT - bottomY - GROUND_HEIGHT);
+  // Bottom pipe cap
+  ctx.fillStyle = '#43A047';
+  ctx.fillRect(pipe.x - 5, bottomY, pipe.width + 10, 20);
+  ctx.strokeStyle = '#1B5E20';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pipe.x - 5, bottomY, pipe.width + 10, 20);
+}
+
+function drawGround() {
+  const groundY = CANVAS_HEIGHT - GROUND_HEIGHT;
+  // Grass
+  const grassGrad = ctx.createLinearGradient(0, groundY, 0, groundY + 15);
+  grassGrad.addColorStop(0, '#66BB6A');
+  grassGrad.addColorStop(1, '#43A047');
+  ctx.fillStyle = grassGrad;
+  ctx.fillRect(0, groundY, CANVAS_WIDTH, 15);
+
+  // Dirt
+  ctx.fillStyle = '#8D6E63';
+  ctx.fillRect(0, groundY + 15, CANVAS_WIDTH, GROUND_HEIGHT - 15);
+
+  // Grass blades
+  ctx.strokeStyle = '#4CAF50';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < CANVAS_WIDTH; i += 12) {
+    const offset = ((i + groundOffset) % CANVAS_WIDTH);
+    ctx.beginPath();
+    ctx.moveTo(offset, groundY);
+    ctx.lineTo(offset - 3, groundY - 6);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(offset + 6, groundY);
+    ctx.lineTo(offset + 9, groundY - 4);
+    ctx.stroke();
+  }
+}
+
+function drawBackground() {
+  // Sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT - GROUND_HEIGHT);
+  skyGrad.addColorStop(0, '#87CEEB');
+  skyGrad.addColorStop(0.6, '#B8E6FF');
+  skyGrad.addColorStop(1, '#E8F5E9');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+  // Sun
+  ctx.fillStyle = '#FFF9C4';
+  ctx.beginPath();
+  ctx.arc(400, 80, 40, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#FFEE58';
+  ctx.beginPath();
+  ctx.arc(400, 80, 30, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Clouds
+  clouds.forEach(drawCloud);
+
+  // Far mountains
+  ctx.fillStyle = '#A5D6A7';
+  ctx.beginPath();
+  ctx.moveTo(0, CANVAS_HEIGHT - GROUND_HEIGHT);
+  ctx.lineTo(60, CANVAS_HEIGHT - GROUND_HEIGHT - 80);
+  ctx.lineTo(150, CANVAS_HEIGHT - GROUND_HEIGHT - 40);
+  ctx.lineTo(220, CANVAS_HEIGHT - GROUND_HEIGHT - 100);
+  ctx.lineTo(320, CANVAS_HEIGHT - GROUND_HEIGHT - 50);
+  ctx.lineTo(400, CANVAS_HEIGHT - GROUND_HEIGHT - 70);
+  ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT - GROUND_HEIGHT - 30);
+  ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT - GROUND_HEIGHT);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+
+  // Rotation based on velocity
+  const targetRot = Math.min(Math.max(player.velocity * 4, -30), 70);
+  player.rotation += (targetRot - player.rotation) * 0.1;
+  ctx.rotate((player.rotation * Math.PI) / 180);
+
+  let img;
+  if (gameState === STATE.DEAD || gameState === STATE.GAMEOVER) {
+    img = imgDead;
+  } else if (player.velocity < -1) {
+    img = imgDive;
+  } else {
+    img = imgNormal;
+  }
+
+  // Wobble animation
+  const wobble = Math.sin(frameCount * 0.1) * 2;
+  ctx.drawImage(img, -player.width / 2, -player.height / 2 + wobble, player.width, player.height);
+  ctx.restore();
+}
+
+function drawScore() {
+  // Score
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 4;
+  ctx.font = 'bold 48px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.strokeText(score, CANVAS_WIDTH / 2, 60);
+  ctx.fillText(score, CANVAS_WIDTH / 2, 60);
+
+  // Level indicator
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillStyle = '#FFD700';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 3;
+  const levelText = `レベル ${level}`;
+  ctx.strokeText(levelText, CANVAS_WIDTH / 2, 85);
+  ctx.fillText(levelText, CANVAS_WIDTH / 2, 85);
+}
+
+function drawTitleScreen() {
+  drawBackground();
+  drawGround();
+
+  // Title bounce
+  const bounce = Math.sin(frameCount * 0.05) * 10;
+
+  // Title card
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(30, 130 + bounce, CANVAS_WIDTH - 60, 140);
+  drawRoundRect(25, 125 + bounce, CANVAS_WIDTH - 50, 140, 20, 'rgba(255,255,255,0.95)', '#2196F3');
+
+  ctx.fillStyle = '#1565C0';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('こいのぼり', CANVAS_WIDTH / 2, 175 + bounce);
+  ctx.fillText('アドベンチャー', CANVAS_WIDTH / 2, 218 + bounce);
+
+  // Koinobori preview
+  const previewY = 320 + Math.sin(frameCount * 0.08) * 15;
+  ctx.drawImage(imgNormal, CANVAS_WIDTH / 2 - 50, previewY, 100, 65);
+
+  // Tap instruction
+  const alpha = 0.5 + Math.sin(frameCount * 0.08) * 0.5;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText('タップしてスタート！', CANVAS_WIDTH / 2, 470);
+  ctx.globalAlpha = 1;
+
+  // Small instruction for parents
+  ctx.fillStyle = '#666';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('画面をタップして こいのぼりを', CANVAS_WIDTH / 2, 530);
+  ctx.fillText('とばそう！', CANVAS_WIDTH / 2, 550);
+
+  // High score
+  if (highScore > 0) {
+    ctx.fillStyle = '#FF9800';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText(`ベストスコア: ${highScore}`, CANVAS_WIDTH / 2, 600);
+  }
+
+  // Decorative stars
+  for (let i = 0; i < 3; i++) {
+    const sx = 100 + i * 140;
+    const sy = 420 + Math.sin(frameCount * 0.06 + i) * 8;
+    drawStar(sx, sy, 10, '#FFD700');
+  }
+}
+
+function drawGameOverScreen() {
+  // Dim overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+  // Game over card
+  const cardY = 150;
+  drawRoundRect(40, cardY, CANVAS_WIDTH - 80, 380, 20, 'rgba(255,255,255,0.95)', '#F44336');
+
+  // Sad koinobori
+  ctx.drawImage(imgDead, CANVAS_WIDTH / 2 - 50, cardY + 20, 100, 65);
+
+  // Text
+  ctx.fillStyle = '#D32F2F';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('ゲームオーバー', CANVAS_WIDTH / 2, cardY + 120);
+
+  // Score display
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText(`スコア: ${score}`, CANVAS_WIDTH / 2, cardY + 170);
+
+  if (score >= highScore && score > 0) {
+    ctx.fillStyle = '#FF9800';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('ベストスコア！ すごい！', CANVAS_WIDTH / 2, cardY + 210);
+    // Celebration stars
+    for (let i = 0; i < 5; i++) {
+      const sx = 100 + i * 70;
+      const sy = cardY + 240 + Math.sin(frameCount * 0.1 + i) * 5;
+      drawStar(sx, sy, 8, '#FFD700');
+    }
+  } else {
+    ctx.fillStyle = '#666';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(`ベストスコア: ${highScore}`, CANVAS_WIDTH / 2, cardY + 210);
+  }
+
+  // Level reached
+  ctx.fillStyle = '#1565C0';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText(`レベル ${level} まで いったよ！`, CANVAS_WIDTH / 2, cardY + 270);
+
+  // Retry button
+  const retryAlpha = 0.6 + Math.sin(frameCount * 0.08) * 0.4;
+  ctx.globalAlpha = retryAlpha;
+  ctx.fillStyle = '#4CAF50';
+  ctx.beginPath();
+  ctx.roundRect(CANVAS_WIDTH / 2 - 100, cardY + 300, 200, 50, 15);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('もういっかい！', CANVAS_WIDTH / 2, cardY + 332);
+}
+
+// ===== Collision Detection =====
+function checkCollision() {
+  const px = player.x + 8;
+  const py = player.y + 5;
+  const pw = player.width - 16;
+  const ph = player.height - 10;
+
+  // Ground
+  if (py + ph >= CANVAS_HEIGHT - GROUND_HEIGHT) {
+    return true;
+  }
+
+  // Ceiling: don't kill, just clamp (kid-friendly)
+  // (clamping happens in update logic)
+
+  // Pipes
+  for (const pipe of pipes) {
+    // Top pipe
+    if (px + pw > pipe.x && px < pipe.x + pipe.width) {
+      if (py < pipe.topHeight) return true;
+      if (py + ph > pipe.topHeight + pipe.gapSize) return true;
+    }
+  }
+
+  return false;
+}
+
+// ===== Game Logic =====
+function flap() {
+  if (gameState === STATE.TITLE) {
+    gameState = STATE.PLAYING;
+    player = createPlayer();
+    pipes = [];
+    particles = [];
+    stars = [];
+    score = 0;
+    level = 1;
+    pipesCreated = 0;
+    pipeTimer = -30; // Short grace period before first pipe
+    const diff = getDifficulty(score);
+    player.velocity = diff.flapPower;
+    spawnParticles(player.x, player.y + player.height / 2, 5, '#87CEEB');
+    return;
+  }
+
+  if (gameState === STATE.PLAYING) {
+    const diff = getDifficulty(score);
+    // Add flap impulse but clamp max upward speed to prevent ceiling-hugging
+    player.velocity = diff.flapPower;
+    if (player.velocity < diff.maxUpSpeed) {
+      player.velocity = diff.maxUpSpeed;
+    }
+    spawnParticles(player.x, player.y + player.height / 2, 3, '#87CEEB');
+    return;
+  }
+
+  if (gameState === STATE.GAMEOVER) {
+    gameState = STATE.TITLE;
+    return;
+  }
+}
+
+function update() {
+  frameCount++;
+
+  // Update clouds
+  clouds.forEach(c => {
+    c.x -= c.speed;
+    if (c.x + c.w / 2 < 0) {
+      c.x = CANVAS_WIDTH + c.w / 2;
+      c.y = 30 + Math.random() * 200;
+    }
+  });
+
+  // Update particles
+  particles = particles.filter(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    return p.life > 0;
+  });
+
+  // Update stars
+  stars = stars.filter(s => {
+    s.x += s.vx;
+    s.y += s.vy;
+    s.life--;
+    s.vx *= 0.96;
+    s.vy *= 0.96;
+    return s.life > 0;
+  });
+
+  if (gameState !== STATE.PLAYING && gameState !== STATE.DEAD) return;
+
+  const diff = getDifficulty(score);
+
+  if (gameState === STATE.PLAYING) {
+    // Player physics
+    player.velocity += diff.gravity;
+    player.y += player.velocity;
+
+    // Ceiling clamp: don't die, just stop at top
+    if (player.y < 0) {
+      player.y = 0;
+      player.velocity = 0;
+    }
+
+    // Pipe generation
+    pipeTimer++;
+    if (pipeTimer >= diff.pipeInterval) {
+      pipeTimer = 0;
+      pipes.push(createPipe(diff));
+    }
+
+    // Update pipes
+    pipes.forEach(pipe => {
+      pipe.x -= diff.pipeSpeed;
+
+      // Score
+      if (!pipe.scored && pipe.x + pipe.width < player.x) {
+        pipe.scored = true;
+        score++;
+        level = Math.floor(score / 5) + 1;
+        spawnStars(CANVAS_WIDTH / 2, 45);
+        spawnParticles(player.x + player.width, player.y, 8, '#FFD700');
+      }
+    });
+
+    // Remove off-screen pipes
+    pipes = pipes.filter(p => p.x + p.width > -10);
+
+    // Ground scroll
+    groundOffset = (groundOffset + diff.pipeSpeed) % CANVAS_WIDTH;
+
+    // Collision
+    if (checkCollision()) {
+      gameState = STATE.DEAD;
+      deathTimer = 60;
+      spawnParticles(player.x + player.width / 2, player.y + player.height / 2, 20, '#F44336');
+
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('koinobori_high', String(highScore));
+      }
+    }
+  }
+
+  if (gameState === STATE.DEAD) {
+    player.velocity += 0.3;
+    player.y += player.velocity;
+    player.y = Math.min(player.y, CANVAS_HEIGHT - GROUND_HEIGHT - player.height);
+    deathTimer--;
+    if (deathTimer <= 0) {
+      gameState = STATE.GAMEOVER;
+    }
+  }
+}
+
+function render() {
+  ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+  if (gameState === STATE.TITLE) {
+    drawTitleScreen();
+    return;
+  }
+
+  drawBackground();
+
+  // Draw pipes
+  pipes.forEach(drawPipe);
+
+  // Draw ground
+  drawGround();
+
+  // Draw player
+  drawPlayer();
+
+  // Draw particles
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  // Draw stars
+  stars.forEach(s => {
+    ctx.globalAlpha = s.life / 40;
+    drawStar(s.x, s.y, s.size * (s.life / 40), '#FFD700');
+  });
+  ctx.globalAlpha = 1;
+
+  // Draw score
+  if (gameState === STATE.PLAYING || gameState === STATE.DEAD) {
+    drawScore();
+  }
+
+  // Game over overlay
+  if (gameState === STATE.GAMEOVER) {
+    drawGameOverScreen();
+  }
+}
+
+function gameLoop() {
+  update();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ===== Input Handling =====
+function handleInput(e) {
+  e.preventDefault();
+  flap();
+}
+
+canvas.addEventListener('mousedown', handleInput);
+canvas.addEventListener('touchstart', handleInput);
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    flap();
+  }
+});
+
+// ===== Responsive Scaling =====
+function resizeCanvas() {
+  const ratio = CANVAS_WIDTH / CANVAS_HEIGHT;
+  let w = window.innerWidth;
+  let h = window.innerHeight;
+
+  if (w / h > ratio) {
+    w = h * ratio;
+  } else {
+    h = w / ratio;
+  }
+
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+}
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ===== Initialization =====
+function init() {
+  gameState = STATE.TITLE;
+  gameLoop();
+}
+
+// Loading screen while assets load
+function loadingLoop() {
+  if (gameState === STATE.LOADING) {
+    ctx.fillStyle = '#87CEEB';
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('よみこみちゅう...', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+    requestAnimationFrame(loadingLoop);
+  }
+}
+loadingLoop();
+</script>
+</body>
+</html>
