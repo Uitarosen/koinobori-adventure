@@ -159,7 +159,8 @@ let frameCount = 0;
 let deathTimer = 0;
 let applesCollected = 0;
 let isGoldMode = false;
-const GOLD_MODE_THRESHOLD = 15;
+const GOLD_MODE_THRESHOLD = 30;
+const SIZE_UP_THRESHOLD = 10;
 let goldTransformTimer = 0; // For transformation flash effect
 
 // ===== Difficulty Scaling =====
@@ -181,8 +182,8 @@ function createPlayer() {
   return {
     x: 80,
     y: CANVAS_HEIGHT / 2 - 30,
-    width: 120,
-    height: 78,
+    width: 90,
+    height: 58,
     velocity: 0,
     rotation: 0,
     flapAnim: 0,
@@ -796,6 +797,15 @@ function update() {
           spawnParticles(ax, ay, 12, '#FF4444');
           spawnStars(ax, ay);
           spawnScorePopup(ax, ay - 20, `+${APPLE_SCORE_BONUS}`, '#FF4444');
+
+          // Size up transformation
+          if (applesCollected === SIZE_UP_THRESHOLD && player.width < 120) {
+            player.width = 120;
+            player.height = 78;
+            spawnParticles(player.x + player.width / 2, player.y + player.height / 2, 20, '#4FC3F7');
+            spawnStars(player.x + player.width / 2, player.y + player.height / 2);
+            spawnScorePopup(player.x + player.width / 2, player.y - 30, 'BIG!', '#4FC3F7');
+          }
 
           // Gold mode transformation
           if (!isGoldMode && applesCollected >= GOLD_MODE_THRESHOLD) {
