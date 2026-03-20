@@ -167,12 +167,12 @@ function getDifficulty(currentScore) {
   // Very easy start for 3-year-olds, gradually harder
   const s = currentScore;
   return {
-    gravity: 0.12 + Math.min(s * 0.002, 0.12),
-    flapPower: -(2.5 + Math.min(s * 0.015, 1.2)),
-    pipeSpeed: 1.0 + Math.min(s * 0.05, 2.5),
-    gapSize: Math.max(320 - s * 3, 140),
-    pipeInterval: Math.max(300 - s * 3, 120),
-    maxUpSpeed: -(4.0 + Math.min(s * 0.05, 2.0)),
+    gravity: 0.12 + Math.min(s * 0.001, 0.08),
+    flapPower: -(2.5 + Math.min(s * 0.008, 0.8)),
+    pipeSpeed: 1.0 + Math.min(s * 0.02, 1.5),
+    gapSize: Math.max(320 - s * 1.5, 160),
+    pipeInterval: Math.max(300 - s * 1.5, 140),
+    maxUpSpeed: -(4.0 + Math.min(s * 0.03, 1.5)),
   };
 }
 
