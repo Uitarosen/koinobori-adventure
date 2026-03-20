@@ -44,15 +44,17 @@ canvas.height = CANVAS_HEIGHT;
 
 // ===== Asset Loading =====
 // Processed (background-removed) canvases used for drawing
-let imgNormal, imgDead, imgDive, imgApple;
+let imgNormal, imgDead, imgDive, imgApple, imgGold, imgDiveGold;
 
 const rawNormal = new Image();
 const rawDead = new Image();
 const rawDive = new Image();
 const rawApple = new Image();
+const rawGold = new Image();
+const rawDiveGold = new Image();
 
 let assetsLoaded = 0;
-const TOTAL_ASSETS = 4;
+const TOTAL_ASSETS = 6;
 
 // Remove checker-pattern background from PNG images
 // Background pixels are grayscale (R≈G≈B) ranging from ~180 to ~255
@@ -120,6 +122,8 @@ function onAssetLoad() {
     imgDead = removeCheckerBackground(rawDead);
     imgDive = removeCheckerBackground(rawDive);
     imgApple = removeCheckerBackground(rawApple);
+    imgGold = removeCheckerBackground(rawGold);
+    imgDiveGold = removeCheckerBackground(rawDiveGold);
     init();
   }
 }
@@ -128,11 +132,15 @@ rawNormal.onload = onAssetLoad;
 rawDead.onload = onAssetLoad;
 rawDive.onload = onAssetLoad;
 rawApple.onload = onAssetLoad;
+rawGold.onload = onAssetLoad;
+rawDiveGold.onload = onAssetLoad;
 
 rawNormal.src = 'assets/koinobori_normal.png';
 rawDead.src = 'assets/koinobori_dead.png';
 rawDive.src = 'assets/koinobori_dive.png';
 rawApple.src = 'assets/apple.png';
+rawGold.src = 'assets/koinobori_gold.png';
+rawDiveGold.src = 'assets/koinobori_dive_gold.png';
 
 // ===== Game State =====
 const STATE = Object.freeze({
@@ -149,6 +157,10 @@ let highScore = parseInt(localStorage.getItem('koinobori_high') || '0', 10);
 let level = 1;
 let frameCount = 0;
 let deathTimer = 0;
+let applesCollected = 0;
+let isGoldMode = false;
+const GOLD_MODE_THRESHOLD = 30;
+let goldTransformTimer = 0; // For transformation flash effect
 
 // ===== Difficulty Scaling =====
 function getDifficulty(currentScore) {
@@ -454,6 +466,8 @@ function drawPlayer() {
   let img;
   if (gameState === STATE.DEAD || gameState === STATE.GAMEOVER) {
     img = imgDead;
+  } else if (isGoldMode) {
+    img = player.velocity < -1 ? imgDiveGold : imgGold;
   } else if (player.velocity < -1) {
     img = imgDive;
   } else {
@@ -462,7 +476,18 @@ function drawPlayer() {
 
   // Wobble animation
   const wobble = Math.sin(frameCount * 0.1) * 2;
+
+  // Gold transformation flash effect
+  if (goldTransformTimer > 0) {
+    ctx.globalAlpha = 0.5 + Math.sin(goldTransformTimer * 0.5) * 0.5;
+  }
+
   ctx.drawImage(img, -player.width / 2, -player.height / 2 + wobble, player.width, player.height);
+
+  if (goldTransformTimer > 0) {
+    ctx.globalAlpha = 1;
+  }
+
   ctx.restore();
 }
 
@@ -484,6 +509,17 @@ function drawScore() {
   const levelText = `レベル ${level}`;
   ctx.strokeText(levelText, CANVAS_WIDTH / 2, 85);
   ctx.fillText(levelText, CANVAS_WIDTH / 2, 85);
+
+  // Apple counter
+  const appleText = isGoldMode
+    ? `🍎 ${applesCollected} ✨GOLD✨`
+    : `🍎 ${applesCollected} / ${GOLD_MODE_THRESHOLD}`;
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = isGoldMode ? '#FFD700' : '#FF4444';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 3;
+  ctx.strokeText(appleText, CANVAS_WIDTH / 2, 105);
+  ctx.fillText(appleText, CANVAS_WIDTH / 2, 105);
 }
 
 function drawTitleScreen() {
@@ -636,6 +672,9 @@ function flap() {
     pipesCreated = 0;
     pipeTimer = -30; // Short grace period before first pipe
     appleTimer = 0;
+    applesCollected = 0;
+    isGoldMode = false;
+    goldTransformTimer = 0;
     const diff = getDifficulty(score);
     player.velocity = diff.flapPower;
     spawnParticles(player.x, player.y + player.height / 2, 5, '#87CEEB');
@@ -752,10 +791,20 @@ function update() {
         if (dist < apple.size / 2 + player.width / 3) {
           apple.collected = true;
           score += APPLE_SCORE_BONUS;
+          applesCollected++;
           level = Math.floor(score / 5) + 1;
           spawnParticles(ax, ay, 12, '#FF4444');
           spawnStars(ax, ay);
           spawnScorePopup(ax, ay - 20, `+${APPLE_SCORE_BONUS}`, '#FF4444');
+
+          // Gold mode transformation
+          if (!isGoldMode && applesCollected >= GOLD_MODE_THRESHOLD) {
+            isGoldMode = true;
+            goldTransformTimer = 60;
+            spawnParticles(player.x + player.width / 2, player.y + player.height / 2, 30, '#FFD700');
+            spawnStars(player.x + player.width / 2, player.y + player.height / 2);
+            spawnScorePopup(player.x + player.width / 2, player.y - 30, 'GOLD!', '#FFD700');
+          }
         }
       }
     });
@@ -769,6 +818,11 @@ function update() {
       p.life--;
       return p.life > 0;
     });
+
+    // Update gold transform effect
+    if (goldTransformTimer > 0) {
+      goldTransformTimer--;
+    }
 
     // Ground scroll
     groundOffset = (groundOffset + diff.pipeSpeed) % CANVAS_WIDTH;
