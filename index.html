@@ -76,7 +76,7 @@ function removeCheckerBackground(img) {
   function isGrayish(i) {
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const maxDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
-    return maxDiff < 15 && r > 170;
+    return maxDiff < 20 && r > 150;
   }
 
   // Seed from all edges
@@ -159,7 +159,7 @@ let frameCount = 0;
 let deathTimer = 0;
 let applesCollected = 0;
 let isGoldMode = false;
-const GOLD_MODE_THRESHOLD = 30;
+const GOLD_MODE_THRESHOLD = 15;
 let goldTransformTimer = 0; // For transformation flash effect
 
 // ===== Difficulty Scaling =====
@@ -181,8 +181,8 @@ function createPlayer() {
   return {
     x: 80,
     y: CANVAS_HEIGHT / 2 - 30,
-    width: 90,
-    height: 58,
+    width: 120,
+    height: 78,
     velocity: 0,
     rotation: 0,
     flapAnim: 0,
