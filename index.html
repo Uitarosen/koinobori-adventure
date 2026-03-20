@@ -44,14 +44,15 @@ canvas.height = CANVAS_HEIGHT;
 
 // ===== Asset Loading =====
 // Processed (background-removed) canvases used for drawing
-let imgNormal, imgDead, imgDive;
+let imgNormal, imgDead, imgDive, imgApple;
 
 const rawNormal = new Image();
 const rawDead = new Image();
 const rawDive = new Image();
+const rawApple = new Image();
 
 let assetsLoaded = 0;
-const TOTAL_ASSETS = 3;
+const TOTAL_ASSETS = 4;
 
 // Remove checker-pattern background from PNG images
 // Background pixels are grayscale (R≈G≈B) ranging from ~180 to ~255
@@ -118,6 +119,7 @@ function onAssetLoad() {
     imgNormal = removeCheckerBackground(rawNormal);
     imgDead = removeCheckerBackground(rawDead);
     imgDive = removeCheckerBackground(rawDive);
+    imgApple = removeCheckerBackground(rawApple);
     init();
   }
 }
@@ -125,10 +127,12 @@ function onAssetLoad() {
 rawNormal.onload = onAssetLoad;
 rawDead.onload = onAssetLoad;
 rawDive.onload = onAssetLoad;
+rawApple.onload = onAssetLoad;
 
 rawNormal.src = 'assets/koinobori_normal.png';
 rawDead.src = 'assets/koinobori_dead.png';
 rawDive.src = 'assets/koinobori_dive.png';
+rawApple.src = 'assets/apple.png';
 
 // ===== Game State =====
 const STATE = Object.freeze({
@@ -332,45 +336,13 @@ function drawStar(x, y, size, color) {
 function drawApple(apple) {
   const bobY = apple.y + Math.sin(frameCount * 0.06 + apple.bobOffset) * 6;
   const s = apple.size;
-  const cx = apple.x + s / 2;
-  const cy = bobY + s / 2;
 
-  // Glow effect
   ctx.save();
+  // Glow effect
   ctx.shadowColor = '#FFD700';
   ctx.shadowBlur = 12 + Math.sin(frameCount * 0.1) * 4;
 
-  // Apple body
-  const bodyGrad = ctx.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, s / 2);
-  bodyGrad.addColorStop(0, '#FF4444');
-  bodyGrad.addColorStop(0.7, '#CC0000');
-  bodyGrad.addColorStop(1, '#990000');
-  ctx.fillStyle = bodyGrad;
-  ctx.beginPath();
-  ctx.arc(cx, cy, s / 2, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.shadowBlur = 0;
-
-  // Highlight
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.beginPath();
-  ctx.ellipse(cx - 4, cy - 5, 5, 3, -0.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Stem
-  ctx.strokeStyle = '#5D4037';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - s / 2);
-  ctx.lineTo(cx + 1, cy - s / 2 - 6);
-  ctx.stroke();
-
-  // Leaf
-  ctx.fillStyle = '#4CAF50';
-  ctx.beginPath();
-  ctx.ellipse(cx + 4, cy - s / 2 - 4, 5, 3, 0.5, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.drawImage(imgApple, apple.x, bobY, s, s);
 
   ctx.restore();
 }
