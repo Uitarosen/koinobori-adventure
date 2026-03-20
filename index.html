@@ -45,6 +45,7 @@ canvas.height = CANVAS_HEIGHT;
 // ===== Asset Loading =====
 // Processed (background-removed) canvases used for drawing
 let imgNormal, imgDead, imgDive, imgApple, imgGold, imgDiveGold;
+const imgBg = new Image();
 
 const rawNormal = new Image();
 const rawDead = new Image();
@@ -54,7 +55,7 @@ const rawGold = new Image();
 const rawDiveGold = new Image();
 
 let assetsLoaded = 0;
-const TOTAL_ASSETS = 6;
+const TOTAL_ASSETS = 7;
 
 // Remove checker-pattern background from PNG images
 // Background pixels are grayscale (R≈G≈B) ranging from ~180 to ~255
@@ -134,6 +135,7 @@ rawDive.onload = onAssetLoad;
 rawApple.onload = onAssetLoad;
 rawGold.onload = onAssetLoad;
 rawDiveGold.onload = onAssetLoad;
+imgBg.onload = onAssetLoad;
 
 rawNormal.src = 'assets/koinobori_normal.png';
 rawDead.src = 'assets/koinobori_dead.png';
@@ -141,6 +143,7 @@ rawDive.src = 'assets/koinobori_dive.png';
 rawApple.src = 'assets/apple.png';
 rawGold.src = 'assets/koinobori_gold.png';
 rawDiveGold.src = 'assets/koinobori_dive_gold.png';
+imgBg.src = 'assets/haikei.png';
 
 // ===== Game State =====
 const STATE = Object.freeze({
@@ -419,40 +422,8 @@ function drawGround() {
 }
 
 function drawBackground() {
-  // Sky gradient
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT - GROUND_HEIGHT);
-  skyGrad.addColorStop(0, '#87CEEB');
-  skyGrad.addColorStop(0.6, '#B8E6FF');
-  skyGrad.addColorStop(1, '#E8F5E9');
-  ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-  // Sun
-  ctx.fillStyle = '#FFF9C4';
-  ctx.beginPath();
-  ctx.arc(400, 80, 40, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFEE58';
-  ctx.beginPath();
-  ctx.arc(400, 80, 30, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Clouds
-  clouds.forEach(drawCloud);
-
-  // Far mountains
-  ctx.fillStyle = '#A5D6A7';
-  ctx.beginPath();
-  ctx.moveTo(0, CANVAS_HEIGHT - GROUND_HEIGHT);
-  ctx.lineTo(60, CANVAS_HEIGHT - GROUND_HEIGHT - 80);
-  ctx.lineTo(150, CANVAS_HEIGHT - GROUND_HEIGHT - 40);
-  ctx.lineTo(220, CANVAS_HEIGHT - GROUND_HEIGHT - 100);
-  ctx.lineTo(320, CANVAS_HEIGHT - GROUND_HEIGHT - 50);
-  ctx.lineTo(400, CANVAS_HEIGHT - GROUND_HEIGHT - 70);
-  ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT - GROUND_HEIGHT - 30);
-  ctx.lineTo(CANVAS_WIDTH, CANVAS_HEIGHT - GROUND_HEIGHT);
-  ctx.closePath();
-  ctx.fill();
+  // Draw background image scaled to fill canvas
+  ctx.drawImage(imgBg, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 }
 
 function drawPlayer() {
