@@ -207,6 +207,38 @@ function createPipe(difficulty) {
   };
 }
 
+// ===== Apples =====
+let apples = [];
+let appleTimer = 0;
+const APPLE_SIZE = 30;
+const APPLE_SCORE_BONUS = 3;
+
+function createApple(difficulty) {
+  const minY = 80;
+  const maxY = CANVAS_HEIGHT - GROUND_HEIGHT - APPLE_SIZE - 40;
+  return {
+    x: CANVAS_WIDTH + 10,
+    y: minY + Math.random() * (maxY - minY),
+    size: APPLE_SIZE,
+    collected: false,
+    bobOffset: Math.random() * Math.PI * 2,
+    speed: difficulty.pipeSpeed,
+  };
+}
+
+// ===== Score Popups =====
+let scorePopups = [];
+
+function spawnScorePopup(x, y, text, color) {
+  scorePopups.push({
+    x, y,
+    text,
+    color: color || '#FF6B00',
+    life: 60,
+    vy: -1.5,
+  });
+}
+
 // ===== Clouds =====
 let clouds = [];
 for (let i = 0; i < 5; i++) {
@@ -295,6 +327,52 @@ function drawStar(x, y, size, color) {
   }
   ctx.closePath();
   ctx.fill();
+}
+
+function drawApple(apple) {
+  const bobY = apple.y + Math.sin(frameCount * 0.06 + apple.bobOffset) * 6;
+  const s = apple.size;
+  const cx = apple.x + s / 2;
+  const cy = bobY + s / 2;
+
+  // Glow effect
+  ctx.save();
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = 12 + Math.sin(frameCount * 0.1) * 4;
+
+  // Apple body
+  const bodyGrad = ctx.createRadialGradient(cx - 3, cy - 3, 2, cx, cy, s / 2);
+  bodyGrad.addColorStop(0, '#FF4444');
+  bodyGrad.addColorStop(0.7, '#CC0000');
+  bodyGrad.addColorStop(1, '#990000');
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, s / 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+
+  // Highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.ellipse(cx - 4, cy - 5, 5, 3, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Stem
+  ctx.strokeStyle = '#5D4037';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s / 2);
+  ctx.lineTo(cx + 1, cy - s / 2 - 6);
+  ctx.stroke();
+
+  // Leaf
+  ctx.fillStyle = '#4CAF50';
+  ctx.beginPath();
+  ctx.ellipse(cx + 4, cy - s / 2 - 4, 5, 3, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
 }
 
 function drawPipe(pipe) {
@@ -577,12 +655,15 @@ function flap() {
     gameState = STATE.PLAYING;
     player = createPlayer();
     pipes = [];
+    apples = [];
     particles = [];
     stars = [];
+    scorePopups = [];
     score = 0;
     level = 1;
     pipesCreated = 0;
     pipeTimer = -30; // Short grace period before first pipe
+    appleTimer = 0;
     const diff = getDifficulty(score);
     player.velocity = diff.flapPower;
     spawnParticles(player.x, player.y + player.height / 2, 5, '#87CEEB');
@@ -675,6 +756,48 @@ function update() {
     // Remove off-screen pipes
     pipes = pipes.filter(p => p.x + p.width > -10);
 
+    // Apple generation
+    appleTimer++;
+    const appleInterval = Math.max(200 - score * 2, 90);
+    if (appleTimer >= appleInterval) {
+      appleTimer = 0;
+      apples.push(createApple(diff));
+    }
+
+    // Update apples
+    apples.forEach(apple => {
+      apple.x -= apple.speed;
+
+      if (!apple.collected) {
+        // Collision with player
+        const bobY = apple.y + Math.sin(frameCount * 0.06 + apple.bobOffset) * 6;
+        const ax = apple.x + apple.size / 2;
+        const ay = bobY + apple.size / 2;
+        const px = player.x + player.width / 2;
+        const py = player.y + player.height / 2;
+        const dist = Math.sqrt((ax - px) ** 2 + (ay - py) ** 2);
+
+        if (dist < apple.size / 2 + player.width / 3) {
+          apple.collected = true;
+          score += APPLE_SCORE_BONUS;
+          level = Math.floor(score / 5) + 1;
+          spawnParticles(ax, ay, 12, '#FF4444');
+          spawnStars(ax, ay);
+          spawnScorePopup(ax, ay - 20, `+${APPLE_SCORE_BONUS}`, '#FF4444');
+        }
+      }
+    });
+
+    // Remove off-screen or collected apples
+    apples = apples.filter(a => a.x + a.size > -10 && !a.collected);
+
+    // Update score popups
+    scorePopups = scorePopups.filter(p => {
+      p.y += p.vy;
+      p.life--;
+      return p.life > 0;
+    });
+
     // Ground scroll
     groundOffset = (groundOffset + diff.pipeSpeed) % CANVAS_WIDTH;
 
@@ -715,6 +838,9 @@ function render() {
   // Draw pipes
   pipes.forEach(drawPipe);
 
+  // Draw apples
+  apples.forEach(drawApple);
+
   // Draw ground
   drawGround();
 
@@ -735,6 +861,19 @@ function render() {
   stars.forEach(s => {
     ctx.globalAlpha = s.life / 40;
     drawStar(s.x, s.y, s.size * (s.life / 40), '#FFD700');
+  });
+  ctx.globalAlpha = 1;
+
+  // Draw score popups
+  scorePopups.forEach(p => {
+    ctx.globalAlpha = p.life / 60;
+    ctx.fillStyle = p.color;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.strokeText(p.text, p.x, p.y);
+    ctx.fillText(p.text, p.x, p.y);
   });
   ctx.globalAlpha = 1;
 
