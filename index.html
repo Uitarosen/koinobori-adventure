@@ -45,6 +45,7 @@ canvas.height = CANVAS_HEIGHT;
 // ===== Asset Loading =====
 // Processed (background-removed) canvases used for drawing
 let imgNormal, imgDead, imgDive, imgApple, imgGold, imgDiveGold;
+let imgCrowNormal, imgCrowDive;
 
 const rawNormal = new Image();
 const rawDead = new Image();
@@ -52,9 +53,11 @@ const rawDive = new Image();
 const rawApple = new Image();
 const rawGold = new Image();
 const rawDiveGold = new Image();
+const rawCrowNormal = new Image();
+const rawCrowDive = new Image();
 
 let assetsLoaded = 0;
-const TOTAL_ASSETS = 6;
+const TOTAL_ASSETS = 8;
 
 // Remove checker-pattern background from PNG images
 // Background pixels are grayscale (R≈G≈B) ranging from ~180 to ~255
@@ -76,7 +79,7 @@ function removeCheckerBackground(img) {
   function isGrayish(i) {
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const maxDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
-    return maxDiff < 20 && r > 150;
+    return maxDiff < 20 && r > 120;
   }
 
   // Seed from all edges
@@ -124,6 +127,8 @@ function onAssetLoad() {
     imgApple = removeCheckerBackground(rawApple);
     imgGold = removeCheckerBackground(rawGold);
     imgDiveGold = removeCheckerBackground(rawDiveGold);
+    imgCrowNormal = removeCheckerBackground(rawCrowNormal);
+    imgCrowDive = removeCheckerBackground(rawCrowDive);
     init();
   }
 }
@@ -134,6 +139,8 @@ rawDive.onload = onAssetLoad;
 rawApple.onload = onAssetLoad;
 rawGold.onload = onAssetLoad;
 rawDiveGold.onload = onAssetLoad;
+rawCrowNormal.onload = onAssetLoad;
+rawCrowDive.onload = onAssetLoad;
 
 rawNormal.src = 'assets/koinobori_normal.png';
 rawDead.src = 'assets/koinobori_dead.png';
@@ -141,15 +148,25 @@ rawDive.src = 'assets/koinobori_dive.png';
 rawApple.src = 'assets/apple.png';
 rawGold.src = 'assets/koinobori_gold.png';
 rawDiveGold.src = 'assets/koinobori_dive_gold.png';
+rawCrowNormal.src = 'assets/Craw_normal.png';
+rawCrowDive.src = 'assets/Craw_dive.png';
 
 // ===== Game State =====
 const STATE = Object.freeze({
   LOADING: 'loading',
   TITLE: 'title',
+  DIFFICULTY: 'difficulty',
   PLAYING: 'playing',
   DEAD: 'dead',
   GAMEOVER: 'gameover',
 });
+
+// ===== Difficulty Mode =====
+const DIFFICULTY_MODE = Object.freeze({
+  EASY: 'easy',
+  HARD: 'hard',
+});
+let difficultyMode = DIFFICULTY_MODE.EASY;
 
 let gameState = STATE.LOADING;
 let score = 0;
@@ -241,6 +258,34 @@ function createApple(difficulty) {
     bobOffset: Math.random() * Math.PI * 2,
     speed: difficulty.pipeSpeed,
   };
+}
+
+// ===== Crows (Hard mode only) =====
+let crows = [];
+let crowTimer = 0;
+const CROW_SIZE = 60;
+
+function createCrow(difficulty) {
+  const minY = 60;
+  const maxY = CANVAS_HEIGHT - GROUND_HEIGHT - CROW_SIZE - 40;
+  const baseSpeed = difficulty.pipeSpeed + 0.5;
+  return {
+    x: CANVAS_WIDTH + 10,
+    y: minY + Math.random() * (maxY - minY),
+    width: CROW_SIZE,
+    height: CROW_SIZE,
+    speed: baseSpeed + Math.random() * 1.0,
+    animTimer: Math.random() * Math.PI * 2,
+    waveMagnitude: 15 + Math.random() * 20,
+    waveSpeed: 0.03 + Math.random() * 0.02,
+    baseY: 0, // set after creation
+  };
+}
+
+function drawCrow(crow) {
+  const animFrame = Math.floor(frameCount / 15) % 2;
+  const img = animFrame === 0 ? imgCrowNormal : imgCrowDive;
+  ctx.drawImage(img, crow.x, crow.y, crow.width, crow.height);
 }
 
 // ===== Score Popups =====
@@ -521,6 +566,18 @@ function drawScore() {
   ctx.lineWidth = 3;
   ctx.strokeText(appleText, CANVAS_WIDTH / 2, 105);
   ctx.fillText(appleText, CANVAS_WIDTH / 2, 105);
+
+  // Difficulty mode indicator
+  if (difficultyMode === DIFFICULTY_MODE.HARD) {
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillStyle = '#F44336';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.textAlign = 'right';
+    ctx.strokeText('むずかしい', CANVAS_WIDTH - 10, 25);
+    ctx.fillText('むずかしい', CANVAS_WIDTH - 10, 25);
+    ctx.textAlign = 'center';
+  }
 }
 
 function drawTitleScreen() {
@@ -572,6 +629,45 @@ function drawTitleScreen() {
     const sy = 420 + Math.sin(frameCount * 0.06 + i) * 8;
     drawStar(sx, sy, 10, '#FFD700');
   }
+}
+
+function drawDifficultyScreen() {
+  drawBackground();
+  drawGround();
+
+  // Title
+  const bounce = Math.sin(frameCount * 0.05) * 5;
+  ctx.fillStyle = '#1565C0';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('なんいどを えらんでね！', CANVAS_WIDTH / 2, 150 + bounce);
+
+  // Easy button
+  const easyY = 240;
+  drawRoundRect(60, easyY, CANVAS_WIDTH - 120, 120, 20, '#4CAF50', '#388E3C');
+  ctx.drawImage(imgNormal, 80, easyY + 15, 80, 52);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillText('やさしい', CANVAS_WIDTH / 2 + 30, easyY + 60);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#E8F5E9';
+  ctx.fillText('はじめてでも あんしん！', CANVAS_WIDTH / 2 + 30, easyY + 95);
+
+  // Hard button
+  const hardY = 400;
+  drawRoundRect(60, hardY, CANVAS_WIDTH - 120, 120, 20, '#D32F2F', '#B71C1C');
+  ctx.drawImage(imgCrowNormal, 80, hardY + 15, 70, 70);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillText('むずかしい', CANVAS_WIDTH / 2 + 30, hardY + 60);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#FFCDD2';
+  ctx.fillText('カラスが おそってくる！', CANVAS_WIDTH / 2 + 30, hardY + 95);
+
+  // Back hint
+  ctx.fillStyle = '#999';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('タップして えらんでね', CANVAS_WIDTH / 2, 580);
 }
 
 function drawGameOverScreen() {
@@ -655,30 +751,54 @@ function checkCollision() {
     }
   }
 
+  // Crows (hard mode)
+  if (difficultyMode === DIFFICULTY_MODE.HARD) {
+    for (const crow of crows) {
+      const cx = crow.x + 10;
+      const cy = crow.y + 10;
+      const cw = crow.width - 20;
+      const ch = crow.height - 20;
+      if (px + pw > cx && px < cx + cw && py + ph > cy && py < cy + ch) {
+        return true;
+      }
+    }
+  }
+
   return false;
 }
 
 // ===== Game Logic =====
+function startGame() {
+  gameState = STATE.PLAYING;
+  player = createPlayer();
+  pipes = [];
+  apples = [];
+  crows = [];
+  particles = [];
+  stars = [];
+  scorePopups = [];
+  score = 0;
+  level = 1;
+  pipesCreated = 0;
+  pipeTimer = -30;
+  appleTimer = 0;
+  crowTimer = 0;
+  applesCollected = 0;
+  isGoldMode = false;
+  goldTransformTimer = 0;
+  const diff = getDifficulty(score);
+  player.velocity = diff.flapPower;
+  spawnParticles(player.x, player.y + player.height / 2, 5, '#87CEEB');
+}
+
 function flap() {
   if (gameState === STATE.TITLE) {
-    gameState = STATE.PLAYING;
-    player = createPlayer();
-    pipes = [];
-    apples = [];
-    particles = [];
-    stars = [];
-    scorePopups = [];
-    score = 0;
-    level = 1;
-    pipesCreated = 0;
-    pipeTimer = -30; // Short grace period before first pipe
-    appleTimer = 0;
-    applesCollected = 0;
-    isGoldMode = false;
-    goldTransformTimer = 0;
-    const diff = getDifficulty(score);
-    player.velocity = diff.flapPower;
-    spawnParticles(player.x, player.y + player.height / 2, 5, '#87CEEB');
+    gameState = STATE.DIFFICULTY;
+    return;
+  }
+
+  // Difficulty selection is handled by handleDifficultyClick
+  if (gameState === STATE.DIFFICULTY) {
     return;
   }
 
@@ -822,6 +942,30 @@ function update() {
     // Remove off-screen or collected apples
     apples = apples.filter(a => a.x + a.size > -10 && !a.collected);
 
+    // Crow generation and update (hard mode only)
+    if (difficultyMode === DIFFICULTY_MODE.HARD) {
+      crowTimer++;
+      // Crows start appearing after score 3, get more frequent over time
+      const crowStartScore = 3;
+      if (score >= crowStartScore) {
+        const crowInterval = Math.max(250 - score * 2, 100);
+        if (crowTimer >= crowInterval) {
+          crowTimer = 0;
+          const crow = createCrow(diff);
+          crow.baseY = crow.y;
+          crows.push(crow);
+        }
+      }
+
+      crows.forEach(crow => {
+        crow.x -= crow.speed;
+        crow.animTimer += crow.waveSpeed;
+        crow.y = crow.baseY + Math.sin(crow.animTimer) * crow.waveMagnitude;
+      });
+
+      crows = crows.filter(c => c.x + c.width > -10);
+    }
+
     // Update score popups
     scorePopups = scorePopups.filter(p => {
       p.y += p.vy;
@@ -869,6 +1013,11 @@ function render() {
     return;
   }
 
+  if (gameState === STATE.DIFFICULTY) {
+    drawDifficultyScreen();
+    return;
+  }
+
   drawBackground();
 
   // Draw pipes
@@ -876,6 +1025,11 @@ function render() {
 
   // Draw apples
   apples.forEach(drawApple);
+
+  // Draw crows (hard mode)
+  if (difficultyMode === DIFFICULTY_MODE.HARD) {
+    crows.forEach(drawCrow);
+  }
 
   // Draw ground
   drawGround();
@@ -931,8 +1085,51 @@ function gameLoop() {
 }
 
 // ===== Input Handling =====
+function getCanvasCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = CANVAS_WIDTH / rect.width;
+  const scaleY = CANVAS_HEIGHT / rect.height;
+  let clientX, clientY;
+  if (e.touches) {
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+  } else {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  }
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY,
+  };
+}
+
+function handleDifficultyClick(e) {
+  if (gameState !== STATE.DIFFICULTY) return false;
+  const pos = getCanvasCoords(e);
+  const easyY = 240;
+  const hardY = 400;
+  const btnX = 60;
+  const btnW = CANVAS_WIDTH - 120;
+  const btnH = 120;
+
+  if (pos.x >= btnX && pos.x <= btnX + btnW) {
+    if (pos.y >= easyY && pos.y <= easyY + btnH) {
+      difficultyMode = DIFFICULTY_MODE.EASY;
+      startGame();
+      return true;
+    }
+    if (pos.y >= hardY && pos.y <= hardY + btnH) {
+      difficultyMode = DIFFICULTY_MODE.HARD;
+      startGame();
+      return true;
+    }
+  }
+  return false;
+}
+
 function handleInput(e) {
   e.preventDefault();
+  if (handleDifficultyClick(e)) return;
   flap();
 }
 
